@@ -7,6 +7,9 @@
 #include "assert.h"
 
 #define LEAST_MIN (1024)
+#define ALIGN (4)
+#define MAGIC_BYTES (4)
+#define MAGIC     (0x1a2b3c4d)
 typedef struct {
 	void* base;
 	uint32_t malloc_num, free_num;
@@ -16,15 +19,16 @@ typedef enum {
 	INVALID,
 }block_status;
 typedef struct control_block{
+	int magic;
 	block_status valid;
 	uint32_t size;
 	struct control_block* next;
 }control_block_t;
 
 typedef enum {
-	OK = 0,
 	UNALIGN4 = -1,
 	LIMIT_MIN,
+	OK,
 }status_t;
 
 status_t mem_init(mem_info_t*control, uint32_t base, uint32_t len) {
@@ -37,30 +41,34 @@ status_t mem_init(mem_info_t*control, uint32_t base, uint32_t len) {
 	control->free_num = 0;
 
 	control_block_t* frame = (control_block_t*)base;
+	frame->magic = MAGIC;
 	frame->valid = INVALID;
 	frame->size = len - sizeof(control_block_t);
 	frame->next = NULL;
 	return OK;
 	
 }
-
-void merge_block() {
-}
 void* tiny_malloc(mem_info_t *info, uint32_t size) {
 	assert(info->base);
 	// find available mem block
 	control_block_t* start = (control_block_t*)info->base;
+	// align the size to 4B
+	size = (size + 3) & (~0x03);
 	while (start) {
 		// try allocate
 		if (start->valid == INVALID) {
 			if ((start->size) >= size) {
 				// split the area 
-				int remain_size = start->size - size - 4 - sizeof(control_block_t);
+				int remain_size = start->size - size - ALIGN - sizeof(control_block_t) - MAGIC_BYTES; // need substract 4B aligned, 4B magic at the end
 				start->valid = VALID;
 				start->size = size;
+				//fill the magic at the end 
+				int len_to_end = sizeof(control_block_t) + start->size;
+				int* end_pos = (int*)((int)start + len_to_end);
+				*end_pos = MAGIC;
 				if (remain_size > 0) {
 					// make sure the alignment
-					control_block_t* new_block = (control_block_t*)((int)((char*)start + sizeof(control_block_t) + start->size + 4) & (~0x4));
+					control_block_t* new_block = (control_block_t*)((char*)start + len_to_end + ALIGN + MAGIC_BYTES);
 					new_block->size = remain_size;
 					new_block->valid = INVALID;
 					new_block->next = NULL;
@@ -95,14 +103,15 @@ void* tiny_free(mem_info_t* info, void* mem) {
 	// find available mem block
 	control_block_t* del = (control_block_t*)((int)mem - sizeof(control_block_t));
 	del->valid = INVALID;
+	info->free_num -= 1;
 	// merge 
 	control_block_t* start = (control_block_t *)(info->base);
 	while (start) {
 		while (start->next){
 			if ((start->valid == INVALID) && (start->next->valid == INVALID)) {
-				int block_len = sizeof(control_block_t) + start->size + 4;
+				int block_len = sizeof(control_block_t) + start->size + ALIGN + MAGIC_BYTES;
 				if (((int)start + block_len) == (int)start->next) {
-					start->size = start->size + 4 + start->next->size + sizeof(control_block_t);
+					start->size = start->size + ALIGN + MAGIC_BYTES + start->next->size + sizeof(control_block_t);
 					start->next = start->next->next;
 				}
 			}
