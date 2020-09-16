@@ -6,6 +6,7 @@
 #include "stdint.h"
 #include "assert.h"
 
+#define USE_SINGLE_CHAIN (0)
 #define LEAST_MIN (1024)
 #define ALIGN (4)
 #define MAGIC_BYTES (4)
@@ -23,6 +24,7 @@ typedef struct control_block{
 	block_status valid;
 	uint32_t size;
 	struct control_block* next;
+	struct control_block* prev;
 }control_block_t;
 
 typedef enum {
@@ -45,6 +47,7 @@ status_t mem_init(mem_info_t*control, uint32_t base, uint32_t len) {
 	frame->valid = INVALID;
 	frame->size = len - sizeof(control_block_t);
 	frame->next = NULL;
+	frame->prev = NULL;
 	return OK;
 	
 }
@@ -53,13 +56,13 @@ void* tiny_malloc(mem_info_t *info, uint32_t size) {
 	// find available mem block
 	control_block_t* start = (control_block_t*)info->base;
 	// align the size to 4B
-	size = (size + 3) & (~0x03);
+	size = (size + ALIGN) & (~(ALIGN-1));
 	while (start) {
 		// try allocate
 		if (start->valid == INVALID) {
 			if ((start->size) >= size) {
 				// split the area 
-				int remain_size = start->size - size - ALIGN - sizeof(control_block_t) - MAGIC_BYTES; // need substract 4B aligned, 4B magic at the end
+				int remain_size = start->size - size - sizeof(control_block_t) - MAGIC_BYTES; // need substract 4B aligned, 4B magic at the end
 				start->valid = VALID;
 				start->size = size;
 				//fill the magic at the end 
@@ -68,7 +71,8 @@ void* tiny_malloc(mem_info_t *info, uint32_t size) {
 				*end_pos = MAGIC;
 				if (remain_size > 0) {
 					// make sure the alignment
-					control_block_t* new_block = (control_block_t*)((char*)start + len_to_end + ALIGN + MAGIC_BYTES);
+					control_block_t* new_block = (control_block_t*)((char*)start + len_to_end + MAGIC_BYTES);
+					new_block->magic = MAGIC;
 					new_block->size = remain_size;
 					new_block->valid = INVALID;
 					new_block->next = NULL;
@@ -77,9 +81,16 @@ void* tiny_malloc(mem_info_t *info, uint32_t size) {
 						control_block_t* tmp = start->next;
 						start->next = new_block;
 						new_block->next = tmp;
+#if (USE_SINGLE_CHAIN == 0)
+						new_block->prev = start;
+						tmp->prev = new_block;
+#endif
 					}
 					else {
 						start->next = new_block;
+#if (USE_SINGLE_CHAIN == 0)
+						new_block->prev = start;
+#endif
 					}
 				}
 				info->malloc_num += 1;
@@ -98,20 +109,49 @@ void* tiny_calloc(mem_info_t* info, uint32_t numElements, uint32_t sizeOfElement
 
 }
 
+#define CUR_BLOCK_LEN(ptr) (sizeof(control_block_t) + ptr->size + MAGIC_BYTES)
 void* tiny_free(mem_info_t* info, void* mem) {
 	assert(info->base);
 	// find available mem block
 	control_block_t* del = (control_block_t*)((int)mem - sizeof(control_block_t));
 	del->valid = INVALID;
-	info->free_num -= 1;
+	info->free_num += 1;
+#if (USE_SINGLE_CHAIN == 0)
+	// merge the next first, in case delete the node
+	if ((del->next) && (del->next->valid == INVALID)) {
+		// delete the next node, merge it into this
+		int block_len = CUR_BLOCK_LEN(del);
+		if (((int)del + block_len) == (int)del->next) {
+			del->size = del->size + CUR_BLOCK_LEN(del->next);
+			control_block_t* tmp = del->next;
+			del->next = tmp->next;
+			if (tmp->next) {
+				tmp->next->prev = del;
+			}
+		}
+	}
+	if ((del->prev) && (del->prev->valid == INVALID)) {
+		int block_len = CUR_BLOCK_LEN(del->prev);
+		if (((int)del->prev + block_len) == (int)del) {
+			// delete this node, merge it into the prev
+			control_block_t* tmp = del->prev;
+			tmp->size = tmp->size + CUR_BLOCK_LEN(del);
+			tmp->next = NULL;
+			if (del->next) {
+				tmp->next = del->next->next;
+				del->next->prev = tmp;
+			}
+		}
+	}
+#else
 	// merge 
 	control_block_t* start = (control_block_t *)(info->base);
 	while (start) {
 		while (start->next){
 			if ((start->valid == INVALID) && (start->next->valid == INVALID)) {
-				int block_len = sizeof(control_block_t) + start->size + ALIGN + MAGIC_BYTES;
+				int block_len = CUR_BLOCK_LEN(start);
 				if (((int)start + block_len) == (int)start->next) {
-					start->size = start->size + ALIGN + MAGIC_BYTES + start->next->size + sizeof(control_block_t);
+					start->size = start->size + CUR_BLOCK_LEN(start->next);
 					start->next = start->next->next;
 				}
 			}
@@ -121,6 +161,7 @@ void* tiny_free(mem_info_t* info, void* mem) {
 		}
 		start = start->next;
 	}
+#endif
 }
 
 char mem_pool[4 * LEAST_MIN];
@@ -132,10 +173,14 @@ int main()
 		return -1;
 	char* mem0 = (char*)tiny_malloc(&control, 120);
 	char* mem1 = (char*)tiny_malloc(&control, 120);
+	char* mem2 = (char*)tiny_malloc(&control, 120);
+	char* mem3 = (char*)tiny_malloc(&control, 120);
 	tiny_free(&control, mem0);
+	tiny_free(&control, mem2);
 	tiny_free(&control, mem1);
+	tiny_free(&control, mem3);
 	while (1) {
-		char* mem = (char*)tiny_malloc(&control, 12);
+		char* mem = (char*)tiny_malloc(&control, 5);
 		if ((!mem) || ((int)mem & 0x3)) {
 			break;
 		}
