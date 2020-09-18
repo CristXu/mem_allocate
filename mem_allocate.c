@@ -17,10 +17,7 @@ typedef struct {
 	uint32_t total_size;
 	uint32_t malloc_num, free_num;
 }mem_info_t;
-typedef enum {
-	VALID = 0,
-	INVALID,
-}block_status;
+
 typedef struct control_block{
 	int magic;
 	block_status valid;
