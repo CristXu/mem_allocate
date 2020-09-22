@@ -11,11 +11,6 @@
 #define ALIGN (4)
 #define MAGIC_BYTES (4)
 #define MAGIC     (0x1a2b3c4d)
-typedef struct {
-	void* base;
-	uint32_t total_size;
-	uint32_t malloc_num, free_num;
-}mem_info_t;
 
 typedef struct control_block{
 	int magic;
@@ -25,8 +20,11 @@ typedef struct control_block{
 }control_block_t;
 
 typedef struct {
+	void* base;
+	uint32_t total_size;
+	uint32_t malloc_num, free_num;
 	control_block_t* used_list;
-}super_block_t;
+}mem_info_t;
 
 typedef enum {
 	UNALIGN4 = -1,
@@ -139,29 +137,27 @@ status_t mem_init(mem_info_t*control, uint32_t base, uint32_t len) {
 	control->malloc_num = 0;
 	control->free_num = 0;
 
-	super_block_t* used_list = (super_block_t*)base;
-	used_list->used_list = NULL;
+	control->used_list = NULL;
 	return OK;	
 }
 
 void* tiny_malloc(mem_info_t *info, uint32_t size) {
 	assert(info->base);
 	// find available mem block
-	super_block_t* super = (super_block_t*)info->base;
-	control_block_t* start = super->used_list;
+	control_block_t* start = info->used_list;
 	// align the size to 4B
 	int aligned_size = (size + (ALIGN - 1)) & (~(ALIGN - 1));
 	// without valid list now, update and return directly
 	if (!start) {
 		if (BLOCK_LEN(size) > info->total_size) return NULL;
-		start = (control_block_t*)((int)info->base + sizeof(super_block_t));
+		start = (control_block_t*)((int)info->base);
 		start->magic = MAGIC;
 		start->next = CALC_CONTROL_BLOCK_PTR(info->base, info->total_size);
 		start->prev = NULL;
 		start->size = aligned_size;
 		int* end_magic = (int*)CALC_CONTROL_BLOCK_PTR(start, CUR_BLOCK_LEN(start) - MAGIC_BYTES);
 		*end_magic = MAGIC;
-		super->used_list = start;
+		info->used_list = start;
 		info->malloc_num += 1;
 		return CAST_CONTROL_BLOCKPTR_VOID(start, BLOCK_STRUCT_LEN);
 	}
@@ -204,8 +200,7 @@ void* tiny_free(mem_info_t* info, void* mem) {
 	control_block_t* del = GET_CONTROL_BLOCK_PTR_FROM_ADDR(mem);
 	info->free_num += 1;
 	// check if it is the first used_list node 
-	super_block_t* super = (super_block_t*)info->base;
-	if (del == super->used_list) {
+	if (del == info->used_list) {
 		// only set the size to 0, and don't delete
 		del->size = 0;
 		return;
@@ -219,8 +214,7 @@ void* tiny_free(mem_info_t* info, void* mem) {
 }
 
 void free_all(mem_info_t* info) {
-	super_block_t* super = (super_block_t*)info->base;
-	super->used_list = NULL;
+	info->used_list = NULL;
 }
 
 
@@ -239,6 +233,7 @@ void* tiny_realloc(mem_info_t* info, void* ptr, unsigned newsize) {
 	}
 	// check if we can free the cur node first, then malloc
 	int has_free = 0;
+	int old_size = GET_CONTROL_BLOCK_PTR_FROM_ADDR(ptr)->size;
 	if (tmp->prev) { // not the first node, be sure has the prev node
 		int interval = BLOCK_INTERVAL(tmp->prev, tmp->next);
 		if (interval >= (MAGIC_BYTES + aligned_newsize)) {
@@ -248,7 +243,7 @@ void* tiny_realloc(mem_info_t* info, void* ptr, unsigned newsize) {
 	}
 	void* new_ptr = tiny_malloc(info, newsize);
 	if (new_ptr) {
-		new_memcpy(new_ptr, ptr, ((control_block_t*)ptr)->size);
+		new_memcpy(new_ptr, ptr, old_size);
 		if (!has_free) tiny_free(info, ptr);
 	}
 	return new_ptr;
@@ -299,6 +294,7 @@ int main()
 	char* t = (char*)tiny_malloc(&control, 4000);
 	tiny_free(&control, t0);
 	t = (char*)tiny_realloc(&control, t, 4056);
+	tiny_free(&control, t);
 
 	while (1) {
 		char* mem = (char*)tiny_malloc(&control, 5);
