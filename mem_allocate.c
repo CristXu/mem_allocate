@@ -32,62 +32,124 @@ typedef enum {
 	OK,
 }status_t;
 
-void new_memcpy(void* src, void* dst, uint32_t size) {
-	// set 4 items together 
-	uint8_t remain = size % 8;
-
-	for (int i = 0;i < (size - remain); i += 8) {
-		*((uint8_t*)dst)++ = *((uint8_t*)src)++;
-		*((uint8_t*)dst)++ = *((uint8_t*)src)++;
-		*((uint8_t*)dst)++ = *((uint8_t*)src)++;
-		*((uint8_t*)dst)++ = *((uint8_t*)src)++;
-		*((uint8_t*)dst)++ = *((uint8_t*)src)++;
-		*((uint8_t*)dst)++ = *((uint8_t*)src)++;
-		*((uint8_t*)dst)++ = *((uint8_t*)src)++;
-		*((uint8_t*)dst)++ = *((uint8_t*)src)++;
+#define COPY_REMAIN(remain, src, dst, invert) \
+	switch (remain) { \
+			case 7: \
+				if(invert) \
+					*((uint8_t*)dst)-- = *((uint8_t*)src)--; \
+				else  \
+					*((uint8_t*)dst)++ = *((uint8_t*)src)++; \
+				/* no break; */ \
+			case 6: \
+				if(invert) \
+					*((uint8_t*)dst)-- = *((uint8_t*)src)--; \
+				else  \
+					*((uint8_t*)dst)++ = *((uint8_t*)src)++; \
+				/* no break; */ \
+			case 5: \
+				if(invert) \
+					*((uint8_t*)dst)-- = *((uint8_t*)src)--; \
+				else  \
+					*((uint8_t*)dst)++ = *((uint8_t*)src)++; \
+				/* no break; */ \
+			case 4: \
+				if(invert) \
+					*((uint8_t*)dst)-- = *((uint8_t*)src)--; \
+				else  \
+					*((uint8_t*)dst)++ = *((uint8_t*)src)++; \
+				/* no break; */ \
+			case 3: \
+				if(invert) \
+					*((uint8_t*)dst)-- = *((uint8_t*)src)--; \
+				else  \
+					*((uint8_t*)dst)++ = *((uint8_t*)src)++; \
+				/* no break; */ \
+			case 2: \
+				if(invert) \
+					*((uint8_t*)dst)-- = *((uint8_t*)src)--; \
+				else  \
+					*((uint8_t*)dst)++ = *((uint8_t*)src)++; \
+				/* no break; */ \
+			case 1: \
+				if(invert) \
+					*((uint8_t*)dst)-- = *((uint8_t*)src)--; \
+				else  \
+					*((uint8_t*)dst)++ = *((uint8_t*)src)++; \
+				/* no break; */ \
+			case 0: \
+				break; \
+			default: \
+				break; \
 	}
-	switch (remain) {
-		case 7:
-			*((uint8_t*)dst)++ = *((uint8_t*)src)++;
-			/* no break; */
-		case 6:
-			*((uint8_t*)dst)++ = *((uint8_t*)src)++;
-			/* no break; */
-		case 5:
-			*((uint8_t*)dst)++ = *((uint8_t*)src)++;
-			/* no break; */
-		case 4:
-			*((uint8_t*)dst)++ = *((uint8_t*)src)++;
-			/* no break; */
-		case 3:
-			*((uint8_t*)dst)++ = *((uint8_t*)src)++;
-			/* no break; */
-		case 2:
-			*((uint8_t*)dst)++ = *((uint8_t*)src)++;
-			/* no break; */
-		case 1:
-			*((uint8_t*)dst)++ = *((uint8_t*)src)++;
-			/* no break; */
-		case 0:
-			break;
-		default:
-			break;
+
+typedef void (*copy_ptr)(void* src, void* dst, uint32_t size, int invert);
+// mabye we can use __typeof__ if we use the armclang
+/*
+#defie COPY(src, dst, size, type) \
+	__typeof__(type) *s = src, *d = dst; \
+	for(int i = 0; i<size; i+=(sizeof(type))){ \
+		*d++ = *s++    \
+	}
+*/
+void copy_by_4B(void* src, void* dst, uint32_t size, int invert) {
+	for (int i = 0;i < (size); i += 4) {
+		if(invert)
+			*((uint32_t*)dst)-- = *((uint32_t*)src)--;
+		else
+			*((uint32_t*)dst)++ = *((uint32_t*)src)++;
 	}
 }
+void copy_by_8B(void* src, void* dst, uint32_t size, int invert) {
+	for (int i = 0;i < (size); i += 8) {
+		if (invert)
+			*((uint32_t*)dst)-- = *((uint32_t*)src)--;
+		else
+			*((uint32_t*)dst)++ = *((uint32_t*)src)++;
+	}
+}
+void new_memcpy(void* src, void* dst, uint32_t size) {
+	// make sure from a 4B align addr
+	copy_ptr copy;
+	uint8_t remain;
+	int invert;
+	if (((int)src & 0x4) || ((int)dst & 0x4)) {
+		copy = copy_by_4B;
+		remain = size % 4;
+	}
+	else {
+		copy = copy_by_8B;
+		remain = size % 8;
+	}
+	invert = (int)dst > (int)src ? 1 : 0;
+	if (invert) {
+		src = (void*)((int)src + size);
+		dst = (void*)((int)dst + size);
+	}
+	copy(src, dst, size - remain, invert);
+	COPY_REMAIN(remain, src, dst, invert);
+}
 
+#define B8TOB32(v)  (v<<24 | v<<16 | v<<8 | v)
+/* maybe use a macro when use armclang
+#define assign(p, value, size) \
+	for (int i = 0;i < (size - remain); i += sizeof(__typeof__(value))) {  \
+			*((__typeof__(value)*)ptr)++ = value;  \
+	} 
+*/
 void new_memset(void* ptr, uint8_t value, uint32_t size) {
-	// set 4 items together 
-	uint8_t remain = size % 8;
-
-	for (int i = 0;i < (size - remain); i += 8) {
-		*((uint8_t*)ptr)++ = value;
-		*((uint8_t*)ptr)++ = value;
-		*((uint8_t*)ptr)++ = value;
-		*((uint8_t*)ptr)++ = value;
-		*((uint8_t*)ptr)++ = value;
-		*((uint8_t*)ptr)++ = value;
-		*((uint8_t*)ptr)++ = value;
-		*((uint8_t*)ptr)++ = value;
+	uint8_t remain;
+	uint64_t tmp = (((uint64_t)B8TOB32(value))<<32) | B8TOB32(value);
+	if (((int)ptr & 0x03)) {
+		remain = size % 4;
+		for (int i = 0;i < (size - remain); i += 4) {
+			*((uint32_t*)ptr)++ = (uint32_t)tmp;
+		}
+	}
+	else {
+		remain = size % 8;
+		for (int i = 0;i < (size - remain); i += 8) {
+			*((uint64_t*)ptr)++ = (uint64_t)tmp;
+		}
 	}
 	switch (remain) {
 		case 7:
